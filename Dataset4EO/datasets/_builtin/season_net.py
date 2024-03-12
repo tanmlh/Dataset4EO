@@ -255,6 +255,7 @@ class SeasonNet(Dataset):
 
     def _datapipe(self, resource_dps: List[IterDataPipe]) -> IterDataPipe[Dict[str, Any]]:
 
+        print('It may take a while to unzip the SeasonNet files if they are not unzipped...')
         spring_dp, summer_dp, fall_dp, winter_dp, snow_dp, meta_dp, split_dp = resource_dps
 
         meta_path = iter(meta_dp).__next__()[0]

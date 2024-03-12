@@ -253,19 +253,21 @@ class InriaClipped(Dataset):
                 dp, 2, self._classify_archive, drop_none=True, buffer_size=INFINITE_BUFFER_SIZE
             )
             clip_dir_img = os.path.join(self.root,
-                                        'AerialImageDataset',
+                                        'NEW2-AerialImageDataset',
                                         'clip_c{}_s{}'.format(clip_size, stride_size),
                                         'img_dir',
                                         split)
 
             clip_dir_ann = os.path.join(self.root,
-                                        'AerialImageDataset',
+                                        'NEW2-AerialImageDataset',
                                         'clip_c{}_s{}'.format(clip_size, stride_size),
                                         'ann_dir',
                                         split)
 
             if os.path.exists(clip_dir_img): # images already generated
                 continue
+            else:
+                print(f'Clipping the Inria dataset to patches of sizes {clip_size} x {clip_size}. May take a while...')
 
             if split == 'train' or split == 'val':
                 for img_path, gt_path in tqdm(zip(img_dp, gt_dp)):
@@ -283,7 +285,7 @@ class InriaClipped(Dataset):
 
 
         clip_dir = os.path.join(self.root,
-                                'AerialImageDataset',
+                                'NEW2-AerialImageDataset',
                                 'clip_c{}_s{}'.format(clip_size, stride_size))
         return clip_dir
 

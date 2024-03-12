@@ -23,3 +23,10 @@ from .satlas_s1 import SatlasS1
 from .satlas_s2 import SatlasS2
 from .satlas_naip import SatlasNAIP
 from .hyper_11k import Hyper11k
+from .munich_building import MunichBuilding
+from .planet_building import PlanetBuilding
+from .planet_building_v2 import PlanetBuildingV2
+from .planet_building_paired import PlanetBuildingPaired
+from .planet_building_shape import PlanetBuildingShape
+from .planet_building_raster import PlanetBuildingRaster
+from .global_building_raster import GlobalBuildingRaster

@@ -98,8 +98,6 @@ class NWPU_VHR10(Dataset):
             sha256 = self._CHECKSUMS['ImageSets.zip']
         )
 
-
-
         return [resource]
 
     def _prepare_sample_dp(self, data):
