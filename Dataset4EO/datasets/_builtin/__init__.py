@@ -27,6 +27,11 @@ from .munich_building import MunichBuilding
 from .planet_building import PlanetBuilding
 from .planet_building_v2 import PlanetBuildingV2
 from .planet_building_paired import PlanetBuildingPaired
+from .planet_building_paired_v2 import PlanetBuildingPairedV2
 from .planet_building_shape import PlanetBuildingShape
 from .planet_building_raster import PlanetBuildingRaster
 from .global_building_raster import GlobalBuildingRaster
+from .crowd_ai import CrowdAIDataset
+from .sr_training import SRTrainingDataset
+from .inria_polygonized import InriaPolygonized
+from .sining_planet import SiningPlanetDataset

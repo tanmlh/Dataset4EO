@@ -22,6 +22,7 @@ import json
 from pycocotools.coco import COCO as COCO
 import fiona
 from shapely.geometry import shape
+import geojson
 
 
 from torchdata.datapipes.iter import FileLister, FileOpener, StreamReader

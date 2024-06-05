@@ -12,6 +12,9 @@ from xml.etree import ElementTree
 from Dataset4EO import transforms
 import pdb
 import numpy as np
+from pycocotools.coco import COCO as COCO
+import geojson
+import shapely
 
 from torchdata.datapipes.iter import (
     IterDataPipe,
@@ -41,11 +44,10 @@ from Dataset4EO.features import BoundingBox, Label, EncodedImage
 from .._api import register_dataset, register_info
 
 NAME = "crowd_ai"
-_TRAIN_LEN = 5862
-_VAL_LEN = 5863
-_TRAIN_VAL_LEN = 5862 + 5863
-_TEST_LEN = 11738
-_TEST_1K_LEN = 1000
+_TRAIN_LEN = 280741
+_VAL_LEN = 60317
+_TRAIN_SMALL_LEN = 8366
+_VAL_SMALL_LEN = 1820
 
 @register_info(NAME)
 def _info() -> Dict[str, Any]:
@@ -60,10 +62,9 @@ class CrowdAIResource(ManualDownloadResource):
                          **kwargs)
 
 @register_dataset(NAME)
-class CrowdAI(Dataset):
+class CrowdAIDataset(Dataset):
     """
     """
-
     def __init__(
         self,
         root: Union[str, pathlib.Path],
@@ -73,17 +74,21 @@ class CrowdAI(Dataset):
         skip_integrity_check: bool = False,
     ) -> None:
 
-        assert split in ['train', 'val', 'test', 'test_1k', 'trainval', 'test_10']
+        assert split in ['train', 'val', 'train_small', 'val_small']
         self._split = split
         self.root = root
         self._categories = _info()["categories"]
         self.data_info = data_info
+        self.cat_ids = [100]
+        self.cat2label = {100: 1}
+        self.CLASSES = ('background', 'landslide')
+        self.PALETTE = [[128, 0, 0], [0, 128, 0]]
 
         super().__init__(root, skip_integrity_check=skip_integrity_check)
 
     _CHECKSUMS = {
-        'train': '2efb2dede93f842033dd5f01ad9c6e89ac401d52ba192ff7b5abbb9c9a5a63f6',
-        'val': '6959eb203e4f46b432cddc964f0aab155813c911206741abd59b20525795c3e0',
+        'train': '459b2ef9c4ab0bd24a03cb6e4cb970857106df63bfd7c8356a83f818e045942c',
+        'val': 'd88ad35ef638231977883a168bc9dadf7eb67234358b59eb83d21cd7999309e4'
     }
 
     def get_classes(self):
@@ -106,128 +111,133 @@ class CrowdAI(Dataset):
         return [train_resource, val_resource]
 
 
-    def _prepare_sample(self, data):
+    def _prepare_sample(self, img_id):
 
-        image_data, ann_data = data[1]
-        image_path, image_buffer = image_data
-        ann_path, ann_buffer = ann_data
+        def fix_polygons(polygons, buffer=0.0):
+            polygons_geom = shapely.ops.unary_union(polygons)  # Fix overlapping polygons
+            polygons_geom = polygons_geom.buffer(buffer)  # Fix self-intersecting polygons and other things
+            fixed_polygons = []
+            if polygons_geom.geom_type == "MultiPolygon":
+                for poly in polygons_geom.geoms:
+                    fixed_polygons.append(poly)
+            elif polygons_geom.geom_type == "Polygon":
+                fixed_polygons.append(polygons_geom)
+            else:
+                raise TypeError(f"Geom type {polygons_geom.geom_type} not recognized.")
+            return fixed_polygons
 
-        img_info = {'filename':image_path,
-                    'img_id': image_path.split('/')[-1].split('.')[0],
-                    'ann':{'ann_path': ann_path}}
+        img_info = self.coco.loadImgs([img_id])[0]
+        res_dict = dict()
 
-        return img_info
+        coco = self.coco
+        ann_ids = coco.getAnnIds(imgIds=[img_id])
+        ann_info = coco.loadAnns(ann_ids)
 
-    def _classify_split(self, data):
-        path = pathlib.Path(data[0])
-        if path.name.endswith('train.txt'):
-            return 0
-        elif path.name.endswith('val.txt'):
-            return 1
-        elif path.name.endswith('test.txt'):
-            return 2
-        elif path.name.endswith('test_1k.txt'):
-            return 3
-        elif path.name.endswith('test_10.txt'):
-            return 4
+        gt_bboxes = []
+        gt_labels = []
+        gt_bboxes_ignore = []
+        features = []
+
+        for i, ann in enumerate(ann_info):
+            if ann.get('ignore', False):
+                continue
+            x1, y1, w, h = ann['bbox']
+            inter_w = max(0, min(x1 + w, img_info['width']) - max(x1, 0))
+            inter_h = max(0, min(y1 + h, img_info['height']) - max(y1, 0))
+            if inter_w * inter_h == 0:
+                continue
+            """
+            if ann['area'] <= 0 or w < 1 or h < 1:
+                continue
+            """
+            if ann['category_id'] not in self.cat_ids:
+                continue
+            features.append(ann['segmentation'])
+            bbox = [x1, y1, x1 + w, y1 + h]
+            if ann.get('iscrowd', False):
+                gt_bboxes_ignore.append(bbox)
+            else:
+                gt_bboxes.append(bbox)
+                gt_labels.append(self.cat2label[ann['category_id']])
+
+        if len(gt_bboxes) > 0:
+            gt_bboxes = np.array(gt_bboxes, dtype=np.float32)
+            gt_labels = np.array(gt_labels, dtype=np.int64)
         else:
-            raise ValueError(f'name {path.name} not found as a split file')
+            gt_bboxes = np.zeros((0, 4), dtype=np.float32)
+            gt_labels = np.array([], dtype=np.int64)
 
-    def _classify_archive(self, data):
-        path = pathlib.Path(data[0])
-        if path.name.endswith('.txt'):
-            return 0
-        elif path.name.endswith('jpg'):
-            return 1
-        elif path.name.endswith('xml') and path.parent.name == 'Horizontal Bounding Boxes':
-            return 2
-        elif path.name.endswith('xml') and path.parent.name == 'Oriented Bounding Boxes':
-            return 3
+        if len(gt_bboxes_ignore) > 0:
+            gt_bboxes_ignore = np.array(gt_bboxes_ignore, dtype=np.float32)
         else:
-            return None
+            gt_bboxes_ignore = np.zeros((0, 4), dtype=np.float32)
 
-    def _classify_ann(self, data):
-        path = pathlib.Path(data[0])
-        if path.name.endswith('xml') and path.parent.name == 'Horizontal Bounding Boxes':
-            return 0
-        elif path.name.endswith('xml') and path.parent.name == 'Oriented Bounding Boxes':
-            return 1
-        else:
-            return None
+        """
+        ann = dict(
+            bboxes=gt_bboxes,
+            labels=gt_labels,
+            bboxes_ignore=gt_bboxes_ignore,
+            features=features
+        )
 
-    def _split_key_fn(self, data: Tuple[str, Any]) -> Tuple[str, str]:
-        return data[1].decode('UTF-8')
+        res = dict(
+            filename=os.path.join(self.img_base_dir, img_info['file_name']),
+            # maskname=img_info['mask_name'],
+            img_id=img_id,
+            ann=ann,
+            height=img_info['height'],
+            width=img_info['width']
+        )
+        """
 
-    def _anns_key_fn(self, data: Tuple[str, Any]) -> Tuple[str, str]:
-        path = pathlib.Path(data[0])
-        return path.name.split('.')[0]
+        new_features = []
+        for feature in features:
+            if len(feature) > 1:
+                pdb.set_trace()
+            for x in feature:
+                if len(np.array(x).shape) > 2:
+                    pdb.set_trace()
+            feature = [np.array(x).reshape(-1,2).tolist() for x in feature]
+            exterior = feature[0]
+            interiors = [] if len(feature) == 1 else feature[1:]
+            polygon = geojson.Polygon([exterior], interiors)
+            # polygon_shape = shapely.geometry.shape(polygon)
+            # if not polygon_shape.is_valid:
+            #     fixed_polygon_shape = fix_polygons(polygon_shape, 0.0001)
 
-    def _images_key_fn(self, data: Tuple[str, Any]) -> Tuple[str, str]:
-        path = pathlib.Path(data[0])
-        return path.name.split('.')[0]
+            new_features.append(polygon)
 
-    def _dp_key_fn(self, data):
-        path = pathlib.Path(data[0][0])
-        return path.name.split('.')[0]
+        res = dict(
+            img_id=img_id,
+            img_path = os.path.join(self.img_base_dir, img_info['file_name']),
+            features=new_features
+        )
 
+        return res
 
     def _datapipe(self, resource_dps: List[IterDataPipe]) -> IterDataPipe[Dict[str, Any]]:
 
-        split_dp, ann_dp, trainval_img_dp, test_img_dp = resource_dps
+        train_ann_path = os.path.join(self.root, '8e089a94-555c-4d7b-8f2f-4d733aebb058_train/train/annotation.json')
+        train_small_ann_path = os.path.join(self.root, '8e089a94-555c-4d7b-8f2f-4d733aebb058_train/train/annotation-small.json')
+        val_ann_path = os.path.join(self.root, '0a5c561f-e361-4e9b-a3e2-94f42a003a2b_val/val/annotation.json')
+        val_small_ann_path = os.path.join(self.root, '0a5c561f-e361-4e9b-a3e2-94f42a003a2b_val/val/annotation-small.json')
 
-        """ prepare split """
-        train_split, val_split, test_split, test_split_1k, test_split_10 = Demultiplexer(split_dp, 5, self._classify_split)
-        train_split = LineReader(train_split)
-        val_split = LineReader(val_split)
-        test_split = LineReader(test_split)
-        test_1k_split = LineReader(test_split_1k)
-        test_10_split = LineReader(test_split_10)
+        ann_path = eval(f'{self._split}_ann_path')
+        self.img_base_dir = os.path.join('/'.join(ann_path.split('/')[:-1]), 'images')
 
-        if self._split == 'trainval':
-            split_dp = train_split.concat(val_split)
-        else:
-            split_dp = eval(f'{self._split}_split')
+        coco = COCO(ann_path)
+        self.coco = coco
+        img_ids = self.coco.getImgIds()
+        dp = Mapper(img_ids, self._prepare_sample)
 
-        """ prepare images """
-        img_dp = Concater(trainval_img_dp, test_img_dp)
-
-        """ prepare annotations """
-        ann_dp_h, ann_dp_o = Demultiplexer(
-            ann_dp, 2, self._classify_ann, drop_none=True, buffer_size=INFINITE_BUFFER_SIZE
-        )
-
-        """ correlate the images and the horizontal annotations"""
-        img_ann_dp = IterKeyZipper(
-            img_dp, ann_dp_h,
-            key_fn=self._images_key_fn,
-            ref_key_fn=self._anns_key_fn,
-            buffer_size=INFINITE_BUFFER_SIZE,
-            keep_key=False
-        )
-
-        """ correlate the images, annotations and the split """
-        dp = IterKeyZipper(
-            split_dp, img_ann_dp,
-            key_fn=self._split_key_fn,
-            ref_key_fn=self._dp_key_fn,
-            buffer_size=INFINITE_BUFFER_SIZE,
-            keep_key=False
-        )
-        # dp = Zipper(img_dp, ann_dp)
-
-        ndp = Mapper(dp, self._prepare_sample)
-        ndp = hint_shuffling(ndp)
-        ndp = hint_sharding(ndp)
-
-        return ndp
+        return dp
 
     def __len__(self) -> int:
         return {
             'train': _TRAIN_LEN,
             'val': _VAL_LEN,
-            'test': _TEST_LEN,
-            'trainval': _TRAIN_VAL_LEN,
-            'test_1k': _TEST_1K_LEN
+            'train_small': _TRAIN_SMALL_LEN,
+            'val_small': _VAL_SMALL_LEN,
         }[self._split]
 
 if __name__ == '__main__':

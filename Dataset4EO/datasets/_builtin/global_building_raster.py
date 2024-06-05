@@ -21,6 +21,7 @@ import cv2
 import json
 from pycocotools.coco import COCO as COCO
 from itertools import chain
+import glob
 
 
 from torchdata.datapipes.iter import FileLister, FileOpener, StreamReader
@@ -32,9 +33,10 @@ from torchdata.datapipes.iter import (
     IterKeyZipper,
     LineReader,
     Zipper,
-    IterableWrapper
+    IterableWrapper,
+    Concater
 )
-from torchdata.datapipes.map import Concater
+# from torchdata.datapipes.iter import Concater
 
 from torchdata.datapipes.map import SequenceWrapper
 
@@ -71,21 +73,25 @@ class GlobalBuildingRaster(Dataset):
     def __init__(
         self,
         root,
-        in_base_dir,
+        in_base_dirs,
         out_root,
         *,
         split: str = "full",
         skip_integrity_check: bool = True,
         crop_size =  [256, 256],
         stride: int = [192, 192],
-        patchify = False
+        patchify = False,
+        filter_post_fix=None,
+        data_type='sr'
     ) -> None:
 
         assert split in ('train', 'val', 'test', 'full')
 
         self._split = split
         self.root = root
-        self.in_base_dir = in_base_dir
+        if type(in_base_dirs) == str:
+            in_base_dirs = [in_base_dirs]
+        self.in_base_dirs = in_base_dirs
         self.out_root = out_root
         self._categories = _info()["categories"]
         self.CLASSES = self._categories
@@ -95,19 +101,26 @@ class GlobalBuildingRaster(Dataset):
         self.cat_ids = [1]
         self.cat2label = {1: 1}
         self.patchify = patchify
+        self.filter_post_fix = filter_post_fix
+        assert data_type in ['sr', 'bf']
+        self.data_type = data_type
         # assert self.poly_type in ['microsoft_polygon', 'osm_polygon'], 'Invalid type of the shape file!'
 
         super().__init__(root, skip_integrity_check=skip_integrity_check)
 
     def _resources(self) -> List[OnlineResource]:
 
-        city_resource = GlobalBuildingResource(
-            file_name = self.in_base_dir,
-            preprocess = None,
-            sha256 = None
-        )
+        resources = []
 
-        return [city_resource]
+        for in_base_dir in self.in_base_dirs:
+            cur_resource = GlobalBuildingResource(
+                file_name = in_base_dir,
+                preprocess = None,
+                sha256 = None
+            )
+            resources.append(cur_resource)
+
+        return resources
 
     def _classify_dp(self, data):
         path = pathlib.Path(data[0])
@@ -117,6 +130,12 @@ class GlobalBuildingRaster(Dataset):
 
     def _filter_dp_started_flag(self, data):
         path = pathlib.Path(data[0])
+        # if 'GUF04_DLR_v02_e005_n50_e010_n45_OGR04' in str(path):
+        # if 'GUF04_DLR_v02_w080_n10_w075_n05_OGR04' in str(path):
+        #     return True
+        # else:
+        #     return False
+
         parent = path.parent
         rel_parent = os.path.relpath(parent, self.root)
 
@@ -149,6 +168,10 @@ class GlobalBuildingRaster(Dataset):
         rel_path = os.path.relpath(path, self.root).split('.')[0]
         out_path = os.path.join(self.out_root, rel_path)
         return not os.path.exists(out_path)
+
+    def _filter_by_post_fix(self, data):
+        path = str(pathlib.Path(data[0]))
+        return self.filter_post_fix is None or path.endswith(self.filter_post_fix)
 
     def calculate_patches(self, H, W, w):
         """
@@ -192,9 +215,11 @@ class GlobalBuildingRaster(Dataset):
 
         return path
 
-    def _datapipe(self, resource_dp):
-        raster_dp = resource_dp[0].filter(self._filter_dp_started_flag).filter(self._filter_dp_started_flag).filter(self._filter_dp_finished_flag)
+    def _datapipe(self, resource_dps):
+        resource_dp = Concater(*resource_dps)
+        raster_dp = resource_dp.filter(self._filter_dp_started_flag).filter(self._filter_dp_finished_flag)
         # raster_dp = raster_dp.filter(self._filter_dp_folder_exist)
+        raster_dp = raster_dp.filter(self._filter_by_post_fix)
 
         if self.patchify:
             temp = Mapper(raster_dp, self._parse_dp)
@@ -210,6 +235,6 @@ class GlobalBuildingRaster(Dataset):
 
     def __len__(self) -> int:
 
-        return 1000000
+        return 195104 if self.data_type == 'sr' else 960
         # return len(list(self.raster_dp))
 
